@@ -18,6 +18,7 @@ from collections import defaultdict
 from prettytable import PrettyTable
 from dns import resolver, query, zone
 from dns.exception import FormError, Timeout
+import csv
 
 
 # Global Variables
@@ -27,7 +28,7 @@ POTENTIAL_SUBDOMAINS = set()
 
 
 class SubDomainAnalyzer(object):
-    def __init__(self, output, threads, append_sub_domains, sub_domain_list, socket_timeout=5):
+    def __init__(self, output, threads, append_sub_domains, sub_domain_list, socket_timeout=5, csvfile=None):
         # Root Domain (From Main)
         self.root_domain = None
 
@@ -38,6 +39,12 @@ class SubDomainAnalyzer(object):
         self.sub_domain_list = set(self.__get_sub_domains_list())
         self.append_sub_domains = append_sub_domains
         self.logger = self.create_logger(output)
+        if csv:
+            fieldnames = ['Domain', 'IP']
+            self.csvfile = open(csvfile, 'wb')
+            self.csvwriter = csv.writer(self.csvfile)
+            self.csvwriter.writerow(fieldnames)
+            
         self.__ip_pool = Pool(size=threads)
         self.__domain_pool = Pool(size=threads)
 
@@ -198,6 +205,8 @@ class SubDomainAnalyzer(object):
                 if domain.endswith(self.root_domain):
                     if domain not in REPORT_DETAILS: # Checks if this domain dont added before
                         REPORT_DETAILS[domain].add(ip)
+                        if self.csvwriter:
+                            self.csvwriter.writerow([domain, ip])
                         POTENTIAL_SUBDOMAINS.add(domain.replace("."+self.root_domain, '')) # Add to potential subdomains
                         self.logger.info("[IP Analyzer] %s exists" % domain)
         except socket.herror:
@@ -231,6 +240,8 @@ class SubDomainAnalyzer(object):
             for data in answer:
                 ip = data.address
                 REPORT_DETAILS[domain].add(ip)
+                if self.csvwriter:
+                    self.csvwriter.writerow([domain, ip])
                 oct_ip = self.__oct_builder(ip)
                 if self.__is_public(ip) and oct_ip not in OCT_LIST: # Checks if the ip is a public address, and the IP will not exists on the `OCTLIST` variable,
                     self.async_ip_analyzer(ip)
@@ -293,13 +304,20 @@ class SubDomainAnalyzer(object):
                               "For example: %s example.com" % path.basename(__file__))
             exit(-1)
         self.root_domain = root_domain
+
         if not self.zone_transfer(self.logger, self.root_domain):
             self.logger.info("[DNS][Error] Request timed out or transfer not allowed.")
             self.dns_data()
             self.async_domain_analyzer()
             if POTENTIAL_SUBDOMAINS and self.append_sub_domains: # Check if have a subdomains from IP analyzer or DNS records
                 self.__add_new_sub_domains()
+        
+        if self.csvfile:
+            self.csvfile.close()
+        
         self.logger.info('[Domain Analyzer] Finished!')
+
+
         if REPORT_DETAILS:
             self.__order_table()
 
@@ -325,6 +343,9 @@ if __name__ == '__main__':
     parser.add_argument("-l", "--sub-domain-list",
                         default="subdomains.txt",
                         help="Sub domains list")
+    parser.add_argument("-c", "--csvfile",
+                        default="out.csv",
+                        help="Create csv file")
     sys_args = vars(parser.parse_args())
     domain = sys_args.pop('domain')
     if not path.exists(sys_args['sub_domain_list']):
